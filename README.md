@@ -8,6 +8,13 @@ You can directly put fdscs into the project [PSM](https://github.com/JiaRenChang
 
 # Loss function:
 ```
+maxdisp = ...
+imgL, imgR = ...
+disp_true = ...
+
+
+model = fdscs(maxdisp)
+mask = disp_true < maxdisp
 output = model(imgL, imgR)
 output = torch.squeeze(output, 1)
 
@@ -18,5 +25,5 @@ pc = torch.mean(pc[mask])
 pc3 = (L1 < 3.0).float()
 pc3 = torch.mean(pc3[mask])
 
-print("loss={:.4f}, pc={:.4f}, pc3={:.4f}".format(loss, pc, pc3), end=" ")
+print("loss={:.4f}, pc={:.4f}, pc3={:.4f}".format(loss, pc, pc3))
 ```
