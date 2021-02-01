@@ -34,7 +34,7 @@ def census_transform(img: torch.Tensor, kernel_size: int) -> torch.Tensor:
     # init census container
     census = torch.zeros((n, c, h - kernel_size + 1, w - kernel_size + 1), dtype=(torch.int32), device=(img.device))
     center_points = img[:, :, margin:h - margin, margin:w - margin]
-    offsets = [(u, v) for v in range(kernel_size) for u in range(kernel_size) if not u == 1 == v]
+    offsets = [(u, v) for v in range(kernel_size) for u in range(kernel_size) if not u == census_center == v]
     for u, v in offsets:
         census = census * 2 + (img[:, :, v:v + h - kernel_size + 1, u:u + w - kernel_size + 1] >= center_points).int()
 
@@ -291,12 +291,13 @@ class Down(nn.Module):
 
     def __init__(self, in_channels, out_channels):
         super().__init__()
-        self.maxpool_conv = nn.Sequential(
-                                    nn.MaxPool2d(2), 
-                                    DoubleConv(in_channels, out_channels))
+        self.conv = DoubleConv(in_channels, out_channels)
+        self.maxpool = nn.MaxPool2d(2)
 
     def forward(self, x):
-        return self.maxpool_conv(x)
+        x = self.conv(x)
+        x_maxpool = self.maxpool(x)
+        return x_maxpool, x
 
 
 class Up(nn.Module):
@@ -311,12 +312,10 @@ class Up(nn.Module):
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
-        diffY = x2.size()[2] - x1.size()[2]
-        diffX = x2.size()[3] - x1.size()[3]
-        x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
-        x = torch.cat([x1, x2], dim=1)
-        
-        return self.conv(x)
+        x = torch.cat([x2, x1], dim=1)
+        x = self.conv(x)
+
+        return x
     
 
 class UNet(nn.Module):
@@ -340,15 +339,15 @@ class UNet(nn.Module):
         self.up4 = Up(in_channels=48, out_channels=32)
 
     def forward(self, x):
-        x1 = self.down1(x)
-        x2 = self.down2(x1)
-        x3 = self.down3(x2)
-        x4 = self.down4(x3)
-        x5 = self.inc(x4)
-        x = self.up1(x5, x4)
+        x, x1 = self.down1(x)
+        x, x2 = self.down2(x)
+        x, x3 = self.down3(x)
+        x, x4 = self.down4(x)
+        x = self.inc(x)
+        x = self.up1(x, x4)
         x = self.up2(x, x3)
         x = self.up3(x, x2)
-        out = self.up4(x, x1)
+        x = self.up4(x, x1)
 
         return out
 
@@ -392,6 +391,9 @@ class FDSCS(nn.Module):
 
 
     def lowrescv(self, left, right, imsz=None, maxdisp=128):
+        # half resolution
+        left, right = self.avg_pool(left), self.avg_pool(right)
+
         # rgb to yuv
         left, right = self.rgb_to_yuv(left), self.rgb_to_yuv(right)
 
@@ -410,12 +412,12 @@ class FDSCS(nn.Module):
         # gether data to form a complete costs volume
         costs_volume = torch.cat([Y_cencus, U_abs_diff, V_abs_diff], axis=1)
 
-        return costs_volume
+        return left, costs_volume
 
 
     def forward(self, left, right):
         # costs_volume
-        costs_volume = self.lowrescv(left, right)
+        half_resolution_left, costs_volume = self.lowrescv(left, right)
 
         # costs_signature
         costs_signature = costs_volume
@@ -424,14 +426,14 @@ class FDSCS(nn.Module):
         costs_signature = self.enc2_conv2d_bn(costs_signature)
         costs_signature = self.enc3_conv2d_bn(costs_signature)
 
-        costs_signature = torch.cat([left, costs_signature], axis=1)
+        costs_signature = torch.cat([half_resolution_left, costs_signature], axis=1)
 
         # costs_signature
         costs_signature = self.cenc0_conv2d_bn(costs_signature)
         costs_signature = self.cenc1_conv2d_bn(costs_signature)
         costs_signature = self.cenc2_conv2d_bn(costs_signature)
 
-        unet_input = torch.cat([left, costs_signature], axis=1)
+        unet_input = torch.cat([half_resolution_left, costs_signature], axis=1)
         
         # unet
         out = self.unet(unet_input)
@@ -441,3 +443,4 @@ class FDSCS(nn.Module):
         out = self.up(out)
         
         return out
+
